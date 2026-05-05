@@ -379,6 +379,77 @@
     display: flex; gap: 10px;
   }
 
+  /* Update available toast */
+  #updateToast {
+    position: absolute;
+    bottom: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 300;
+    background: rgba(13,13,26,0.97);
+    border: 1.5px solid rgba(100,180,255,0.35);
+    border-radius: 16px;
+    padding: 14px 16px;
+    width: min(92%, 380px);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column; gap: 8px;
+    transition: opacity 0.4s, transform 0.4s;
+  }
+
+  #updateToast.hidden {
+    display: none;
+  }
+
+  #updateToast.fading {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px);
+  }
+
+  .update-toast-header {
+    display: flex; justify-content: space-between; align-items: center;
+  }
+
+  .update-toast-title {
+    font-family: 'Nunito', sans-serif; font-weight: 900; font-size: 14px;
+    color: #88bbff;
+  }
+
+  .update-toast-version {
+    font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 12px;
+    color: var(--accent-yellow);
+    background: rgba(245,197,24,0.12);
+    border-radius: 8px; padding: 2px 8px;
+  }
+
+  .update-toast-close {
+    background: none; border: none; color: var(--text-muted);
+    font-size: 16px; cursor: pointer; padding: 0 4px; line-height: 1;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .update-toast-list {
+    list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+
+  .update-toast-list li {
+    font-size: 12px; color: var(--text-light); line-height: 1.4;
+    padding-left: 14px; position: relative;
+  }
+
+  .update-toast-list li::before {
+    content: '→'; position: absolute; left: 0;
+    color: var(--accent-cyan); font-size: 11px;
+  }
+
+  .update-toast-reload {
+    align-self: flex-end;
+    padding: 7px 16px; border: none; border-radius: 10px;
+    background: linear-gradient(135deg, #4488ff, #4361ee);
+    color: white; font-family: 'Fredoka', sans-serif;
+    font-size: 13px; font-weight: 700; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    box-shadow: 0 3px 12px rgba(67,97,238,0.4);
+  }
+
   .btn-resume-yes {
     padding: 8px 18px; border: none; border-radius: 10px;
     background: var(--accent-cyan); color: white;
@@ -514,6 +585,17 @@
       </div>
     </div>
     <button class="btn btn-secondary" id="btnBackFromRanking">Volver</button>
+  </div>
+
+  <!-- Update available toast -->
+  <div id="updateToast" class="hidden">
+    <div class="update-toast-header">
+      <span class="update-toast-title">🆕 Actualización disponible</span>
+      <span class="update-toast-version" id="updateToastVersion"></span>
+      <button class="update-toast-close" id="btnDismissUpdate" title="Cerrar">✕</button>
+    </div>
+    <ul class="update-toast-list" id="updateToastChangelog"></ul>
+    <button class="update-toast-reload" id="btnReloadUpdate">↻ Recargar ahora</button>
   </div>
 </div>
 
@@ -1953,6 +2035,91 @@ document.getElementById('btnSkipWin').addEventListener('click', () => {
 
 // Preload Firebase on page load (non-blocking)
 loadFirebase().catch(() => {});
+
+// ---- VERSION POLLING ----
+const VERSION_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const VERSION_STORAGE_KEY = 'bbp_version';
+const VERSION_URL = './version.json';
+
+let currentKnownVersion = null; // version we loaded with this page
+
+async function fetchRemoteVersion() {
+  try {
+    // Cache-bust so we always get the latest version.json
+    const res = await fetch(VERSION_URL + '?t=' + Date.now(), {
+      cache: 'no-store'
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+function showUpdateToast(versionData) {
+  const toast = document.getElementById('updateToast');
+  document.getElementById('updateToastVersion').textContent = 'v' + versionData.version;
+
+  const list = document.getElementById('updateToastChangelog');
+  list.innerHTML = '';
+  (versionData.changelog || []).forEach(item => {
+    const li = document.createElement('li');
+    li.textContent = item;
+    list.appendChild(li);
+  });
+
+  toast.classList.remove('hidden');
+}
+
+function hideUpdateToast() {
+  const toast = document.getElementById('updateToast');
+  toast.classList.add('fading');
+  setTimeout(() => {
+    toast.classList.add('hidden');
+    toast.classList.remove('fading');
+  }, 400);
+}
+
+document.getElementById('btnDismissUpdate').addEventListener('click', hideUpdateToast);
+
+document.getElementById('btnReloadUpdate').addEventListener('click', () => {
+  // Store accepted version so it doesn't re-appear on the fresh load
+  if (currentKnownVersion) {
+    localStorage.setItem(VERSION_STORAGE_KEY, currentKnownVersion);
+  }
+  window.location.reload();
+});
+
+async function checkVersion() {
+  const remote = await fetchRemoteVersion();
+  if (!remote || !remote.version) return;
+
+  if (currentKnownVersion === null) {
+    // First check: record the version this page was loaded with
+    currentKnownVersion = remote.version;
+    // Also check if we already knew this version (dismissed before)
+    const storedVersion = localStorage.getItem(VERSION_STORAGE_KEY);
+    if (storedVersion && storedVersion !== remote.version) {
+      // User had an older stored version — page reloaded into new version
+      // Update stored version silently (they already got the new code)
+      localStorage.setItem(VERSION_STORAGE_KEY, remote.version);
+    } else if (!storedVersion) {
+      localStorage.setItem(VERSION_STORAGE_KEY, remote.version);
+    }
+    return;
+  }
+
+  // Subsequent checks: compare with what we loaded with
+  if (remote.version !== currentKnownVersion) {
+    showUpdateToast(remote);
+    // Stop polling once detected — no need to keep checking
+    clearInterval(versionPollInterval);
+  }
+}
+
+// Start polling
+checkVersion(); // immediate first check to record baseline version
+const versionPollInterval = setInterval(checkVersion, VERSION_CHECK_INTERVAL);
 
 // ---- GAME LOOP ----
 loop();
