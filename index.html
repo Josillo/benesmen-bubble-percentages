@@ -534,6 +534,9 @@
     <div class="star-burst">⭐</div>
     <h1 id="levelClearTitle">¡Nivel superado!</h1>
     <h2 id="levelClearScore"></h2>
+    <p id="levelClearTimerWarn" style="display:none; color:#ff6b35; font-size:14px;">
+      ⚠️ A partir del nivel 11 la barra de tiempo baja a <strong>5 segundos</strong>. ¡Prepárate!
+    </p>
     <button class="btn btn-secondary" id="btnNextLevel">Siguiente nivel</button>
   </div>
 
@@ -651,7 +654,10 @@ let particles = [];
 let popAnimations = [];
 
 // Timer duration depends on difficulty
-function timerDuration() { return difficulty === 'normal' ? 10 : 20; }
+function timerDuration() {
+  if (level >= 11) return difficulty === 'normal' ? 5 : 5;
+  return difficulty === 'normal' ? 10 : 20;
+}
 
 let timerStart = 0;
 let timerActive = false;
@@ -660,9 +666,15 @@ let gridPushY = 0;
 const ROW_HEIGHT_FACTOR = 0.87;
 
 // Scoring state
-let comboCount = 0;       // consecutive hits without a miss
-let lastPopupScore = 0;   // for floating score label
-let scorePopups = [];     // {x, y, text, color, life}
+let comboCount = 0;
+let lastPopupScore = 0;
+let scorePopups = [];
+
+// Level intro animation
+let introAnim = null; // null when inactive
+// introAnim = { startTime, totalRows, rowDelay, rowDuration }
+const INTRO_ROW_DELAY  = 80;   // ms between each row starting
+const INTRO_ROW_DUR    = 320;  // ms for a single row to fall into place
 
 function resize() {
   W = window.innerWidth;
@@ -703,6 +715,30 @@ function gridToPixel(row, col) {
 // Effective ceiling Y — how far the push-down has moved the top
 function effectiveCeilingY() {
   return FIELD_TOP + gridPushY;
+}
+
+// Returns 0..1 progress for a given grid row during the intro animation.
+// 0 = not yet started, 1 = fully settled.
+function introRowProgress(row) {
+  if (!introAnim) return 1;
+  const elapsed = Date.now() - introAnim.startTime;
+  const rowStart = row * INTRO_ROW_DELAY;
+  if (elapsed < rowStart) return 0;
+  const t = Math.min(1, (elapsed - rowStart) / INTRO_ROW_DUR);
+  // Bounce easing: overshoot slightly then settle
+  if (t < 1) {
+    const bounce = 1 - Math.pow(1 - t, 3) * Math.cos(t * Math.PI * 2.5);
+    return Math.max(0, Math.min(1, bounce));
+  }
+  return 1;
+}
+
+// Returns true when all rows have fully settled
+function introAnimDone() {
+  if (!introAnim) return true;
+  const elapsed = Date.now() - introAnim.startTime;
+  const totalTime = introAnim.totalRows * INTRO_ROW_DELAY + INTRO_ROW_DUR + 100;
+  return elapsed >= totalTime;
 }
 
 function pixelToGrid(px, py) {
@@ -884,7 +920,20 @@ function drawGridBubbles() {
       if (v != null) {
         const p = gridToPixel(r, c);
         if (p.y > FIELD_TOP - BUBBLE_D && p.y < BOARD_BOTTOM + BUBBLE_D) {
-          drawPie(p.x, p.y, BUBBLE_R, v, COLORS[v]);
+          // Intro animation: drop row from above the board
+          const progress = introRowProgress(r);
+          if (progress <= 0) continue; // not yet visible
+          let drawY = p.y;
+          let drawR = BUBBLE_R;
+          if (progress < 1) {
+            // Start position: above FIELD_TOP by one full board height
+            const startY = FIELD_TOP - BUBBLE_D * 2;
+            drawY = startY + (p.y - startY) * progress;
+            drawR = BUBBLE_R * (0.4 + 0.6 * progress);
+            ctx.globalAlpha = Math.min(1, progress * 2);
+          }
+          drawPie(p.x, drawY, drawR, v, COLORS[v]);
+          ctx.globalAlpha = 1;
         }
       }
     }
@@ -1071,30 +1120,30 @@ function genLevel(lvl) {
   const q3 = pv(PERCENTAGES.length - 3); // upper quarter (easy:75, normal:85)
 
   const P = [
-    () => { // 1
+    () => { // 1 - simple pairs, 3 rows
       const v=[mid,mid,q1,q3,mid,mid,q1,q3,mid,q1,q3,mid];
       for(let r=0;r<3;r++){const mc=maxC(r);for(let c=0;c<mc;c++)setCell(r,c,v[(r*COLS+c)%v.length]);}
     },
-    () => { // 2
+    () => { // 2 - 4 rows, cycling
       for(let r=0;r<4;r++){const mc=maxC(r);for(let c=0;c<mc;c++)setCell(r,c,pv((r*3+c)%(PERCENTAGES.length-1)));}
     },
-    () => { // 3
+    () => { // 3 - lo/hi contrast, 4 rows
       const v=[lo,hi,mid,q1,q3,lo,hi,mid,q1,q3,lo,hi];
       for(let r=0;r<4;r++){const mc=maxC(r);for(let c=0;c<mc;c++)setCell(r,c,v[(r*3+c)%v.length]);}
     },
-    () => { // 4
+    () => { // 4 - expanding diamond
       for(let r=0;r<6;r++){const mc=maxC(r);const sk=Math.max(0,3-r);
       for(let c=sk;c<mc-sk;c++)setCell(r,c,pv((r+c)%(PERCENTAGES.length-1)));}
     },
-    () => { // 5 - stripes of complements
+    () => { // 5 - horizontal stripes
       for(let r=0;r<5;r++){const mc=maxC(r);const val=PERCENTAGES[r % PERCENTAGES.length];
       for(let c=0;c<mc;c++)setCell(r,c,val);}
     },
-    () => { // 6 - alternating pattern with lo and hi values
+    () => { // 6 - lo/hi checkerboard
       for(let r=0;r<5;r++){const mc=maxC(r);
       for(let c=0;c<mc;c++){if((r+c)%4===0)setCell(r,c,lo);else if((r+c)%4===2)setCell(r,c,hi);else setCell(r,c,pv((r+c*2)%(PERCENTAGES.length)));}}
     },
-    () => { // 7 - full mix
+    () => { // 7 - full mix, 6 rows
       for(let r=0;r<6;r++){const mc=maxC(r);for(let c=0;c<mc;c++)setCell(r,c,pv((r*5+c*3)%PERCENTAGES.length));}
     },
     () => { // 8 - inverted triangle
@@ -1105,8 +1154,67 @@ function genLevel(lvl) {
       for(let r=0;r<7;r++){const mc=maxC(r);
       for(let c=0;c<mc;c++)setCell(r,c,pv((r*4+c*3+r*c)%PERCENTAGES.length));}
     },
-    () => { // 10 - full dense
+    () => { // 10 - full dense, 8 rows
       for(let r=0;r<8;r++){const mc=maxC(r);for(let c=0;c<mc;c++)setCell(r,c,pv((r*7+c*11)%PERCENTAGES.length));}
+    },
+    () => { // 11 - vertical stripes alternating complement pairs
+      for(let r=0;r<7;r++){const mc=maxC(r);
+      for(let c=0;c<mc;c++){const pair=Math.floor(c/2)%PERCENTAGES.length;setCell(r,c,pv(pair));}}
+    },
+    () => { // 12 - cross pattern
+      for(let r=0;r<8;r++){const mc=maxC(r);
+      for(let c=0;c<mc;c++){
+        if(r===3||r===4)setCell(r,c,pv(c%PERCENTAGES.length));
+        else if(c===4||c===5)setCell(r,c,pv((r+2)%PERCENTAGES.length));
+        else setCell(r,c,pv((r*3+c*2)%PERCENTAGES.length));
+      }}
+    },
+    () => { // 13 - concentric rings
+      for(let r=0;r<8;r++){const mc=maxC(r);
+      for(let c=0;c<mc;c++){
+        const ring=Math.min(r,Math.min(c,Math.min(mc-1-c,7-r)));
+        setCell(r,c,pv(ring%PERCENTAGES.length));
+      }}
+    },
+    () => { // 14 - diagonal bands
+      for(let r=0;r<8;r++){const mc=maxC(r);
+      for(let c=0;c<mc;c++)setCell(r,c,pv(Math.floor((r+c)/2)%PERCENTAGES.length));}
+    },
+    () => { // 15 - checkerboard of all values
+      for(let r=0;r<8;r++){const mc=maxC(r);
+      for(let c=0;c<mc;c++)setCell(r,c,pv((r*2+c)%PERCENTAGES.length));}
+    },
+    () => { // 16 - two dense blocks
+      for(let r=0;r<9;r++){const mc=maxC(r);
+      for(let c=0;c<mc;c++){
+        if(c<mc/2)setCell(r,c,pv((r+c)%PERCENTAGES.length));
+        else setCell(r,c,pv((r+c+Math.floor(PERCENTAGES.length/2))%PERCENTAGES.length));
+      }}
+    },
+    () => { // 17 - spiral-like outward fill
+      for(let r=0;r<9;r++){const mc=maxC(r);
+      for(let c=0;c<mc;c++){
+        const d=Math.abs(r-4)+Math.abs(c-5);
+        setCell(r,c,pv((d*3)%PERCENTAGES.length));
+      }}
+    },
+    () => { // 18 - alternating dense rows, 9 rows
+      for(let r=0;r<9;r++){const mc=maxC(r);
+      for(let c=0;c<mc;c++){
+        const phase=r%3;
+        setCell(r,c,pv((c+phase*4)%PERCENTAGES.length));
+      }}
+    },
+    () => { // 19 - mirror symmetry, 10 rows
+      for(let r=0;r<10;r++){const mc=maxC(r);
+      for(let c=0;c<mc;c++){
+        const sym=Math.min(c,mc-1-c);
+        setCell(r,c,pv((r+sym*2)%PERCENTAGES.length));
+      }}
+    },
+    () => { // 20 - maximum chaos, 10 rows, every cell
+      for(let r=0;r<10;r++){const mc=maxC(r);
+      for(let c=0;c<mc;c++)setCell(r,c,pv((r*13+c*7+r*c*3)%PERCENTAGES.length));}
     }
   ];
   P[Math.min(lvl - 1, P.length - 1)]();
@@ -1137,11 +1245,40 @@ function startLevel() {
   genLevel(level);
   currentBubble = pickRandom();
   nextPercentage = pickRandom();
-  state = 'playing';
   comboCount = 0;
   scorePopups = [];
-  timerStart = Date.now(); timerActive = true;
+  timerActive = false;
   updateHUD(); hideOverlays();
+
+  // Count occupied rows for animation duration
+  let totalRows = 0;
+  for (let r = 0; r < grid.length; r++) {
+    if (!grid[r]) continue;
+    if (grid[r].some(v => v != null)) totalRows = r + 1;
+  }
+
+  // Launch intro animation — block shooting during it
+  introAnim = { startTime: Date.now(), totalRows };
+  state = 'intro';
+
+  // Switch to playing once animation completes
+  const animDuration = totalRows * INTRO_ROW_DELAY + INTRO_ROW_DUR + 150;
+  setTimeout(() => {
+    introAnim = null;
+    state = 'playing';
+    timerStart = Date.now(); timerActive = true;
+
+    // Warn player when entering the 5-second tier
+    if (level === 11) {
+      setTimeout(() => {
+        scorePopups.push({
+          x: W / 2, y: H * 0.45,
+          text: '⚠️ ¡Ahora solo 5 segundos!',
+          color: '#ff6b35', life: 2.5
+        });
+      }, 300);
+    }
+  }, animDuration);
 }
 
 function updateHUD() {
@@ -1390,9 +1527,13 @@ function checkTimer() {
 function showLevelClear() {
   document.getElementById('btnQuit').classList.add('hidden');
   document.getElementById('levelClearTitle').textContent =
-    level >= 10 ? '¡Todos los niveles superados!' : `¡Nivel ${level} superado!`;
+    level >= 20 ? '¡Todos los niveles superados!' : `¡Nivel ${level} superado!`;
   document.getElementById('levelClearScore').textContent = `Puntos: ${score}`;
-  if (level >= 10) {
+
+  // Warn about timer change at level 11
+  const timerWarn = document.getElementById('levelClearTimerWarn');
+  if (timerWarn) timerWarn.style.display = level === 10 ? '' : 'none';
+  if (level >= 20) {
     document.getElementById('winScore').textContent = score;
     // Reset win save UI
     document.getElementById('winSaveSection').style.display = '';
@@ -1578,6 +1719,7 @@ function restoreGameState(data) {
   if (!PERCENTAGES.includes(nextPercentage)) nextPercentage = pickRandom();
 
   state = 'playing';
+  introAnim = null; // no intro when resuming a saved game
   shootingBubble = null;
   isAiming = false;
   particles = [];
@@ -1743,6 +1885,11 @@ function loop() {
     updateParticles(); drawParticles(); drawPopAnims();
     updateScorePopups(); drawScorePopups();
     checkTimer();
+  } else if (state === 'intro') {
+    // Bubbles animating in — board visible, no shooting, no timer
+    drawBoardFrame();
+    drawGridBubbles();
+    drawShooter(); // show the upcoming bubble
   } else if (state === 'paused') {
     // Render the board frozen behind the quit dialog
     drawBoardFrame();

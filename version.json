@@ -1,8 +1,7 @@
 {
-  "version": "1.0.3",
-  "date": "2025-05-05",
+  "version": "1.0.4",
+  "date": "2025-05-06",
   "changelog": [
-    "Actualización del botón salir para guardar la partida",
-    "Corregido error en el nivel 6 con burbuja fija"
+    "Nuevos niveles y dificultad añadidos"
   ]
 }
